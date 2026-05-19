@@ -1,6 +1,6 @@
 use crate::compiler::SwfCompiler;
 use crate::util::{read_bytes, write_bytes};
-use rascal::{CompileOptions, ProgramBuilder, SourceProvider, SwfOptions};
+use rascal::{CompileOptions, OptimizationOptions, ProgramBuilder, SourceProvider, SwfOptions};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::io::Error;
@@ -17,6 +17,23 @@ pub struct RascalOptions {
     pub pcode: Vec<String>,
     pub stage_rect: StageSize,
     pub use_network: bool,
+    pub optimizations: RascalOptimizations,
+}
+
+#[derive(Clone, Deserialize, Debug)]
+#[serde(default, deny_unknown_fields)]
+pub struct RascalOptimizations {
+    pub fold_constants: bool,
+    pub promote_variables_to_registers: bool,
+}
+
+impl Default for RascalOptimizations {
+    fn default() -> Self {
+        Self {
+            fold_constants: true,
+            promote_variables_to_registers: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -52,7 +69,7 @@ pub struct RascalCompiler {
 impl SwfCompiler for RascalCompiler {
     fn compile(self: Box<Self>, root_dir: &VfsPath, verify_if_changed: bool) -> anyhow::Result<()> {
         let provider = VfsSourceProvider(root_dir.clone());
-        let mut builder = ProgramBuilder::new(provider);
+        let mut builder = ProgramBuilder::new(provider).with_compile_options(self.compile_options);
         for script in &self.scripts {
             builder.add_script(script);
         }
@@ -63,9 +80,7 @@ impl SwfCompiler for RascalCompiler {
             builder.add_pcode(pcode);
         }
         let program = builder.build()?;
-        let swf = program
-            .compile(self.compile_options)
-            .to_swf(&self.swf_options)?;
+        let swf = program.compile().to_swf(&self.swf_options)?;
         let output_path = root_dir.join(&self.target)?;
         if verify_if_changed {
             if !output_path.is_file()? {
@@ -113,10 +128,18 @@ impl RascalOptions {
             classes: self.classes.clone(),
             scripts: self.scripts.clone(),
             pcode: self.pcode.clone(),
-            compile_options: CompileOptions::default().with_swf_version(
-                self.swf_version
-                    .expect("swf_version is validated elsewhere"),
-            ),
+            compile_options: CompileOptions::default()
+                .with_swf_version(
+                    self.swf_version
+                        .expect("swf_version is validated elsewhere"),
+                )
+                .with_optimizations(
+                    OptimizationOptions::none()
+                        .with_fold_constants(self.optimizations.fold_constants)
+                        .with_promote_variables_to_registers(
+                            self.optimizations.promote_variables_to_registers,
+                        ),
+                ),
             swf_options: SwfOptions::default()
                 .with_frame_rate(self.frame_rate)
                 .with_stage_size(
@@ -141,6 +164,7 @@ impl Default for RascalOptions {
             pcode: vec![],
             stage_rect: Default::default(),
             use_network: false,
+            optimizations: Default::default(),
         }
     }
 }
